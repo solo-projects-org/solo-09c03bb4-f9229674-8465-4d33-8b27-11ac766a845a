@@ -1,6 +1,8 @@
 """网页路由：名单导入、报告续传、配对名单、按批作废与重核。"""
 from __future__ import annotations
 
+import sqlite3
+
 from flask import (
     Blueprint,
     current_app,
@@ -36,8 +38,7 @@ def import_forms():
     if request.method == "POST":
         raw = request.form.get("form_ids", "")
         conn = get_db()
-        result = services.import_forms(conn, raw)
-        conn.commit()
+        result = services.import_forms(conn, raw)  # 服务层自行提交事务
         flash(f"名单导入完成：新增 {len(result['added'])} 单，"
               f"已存在 {len(result['existing'])} 单，"
               f"非法 {len(result['invalid'])} 条。", "info")
@@ -68,10 +69,10 @@ def upload_reports():
         conn = get_db()
         try:
             result = services.import_reports(conn, rows)
-        except Exception as exc:  # 意外错误整体回滚
+        except Exception as exc:  # 意外错误整体回滚（服务层已回滚，这里兜底）
             conn.rollback()
             current_app.logger.exception("报告入档失败")
-            flash(f"入档失败，已全部回滚（未作废任何数据）：{exc}", "danger")
+            flash(f"入档失败，本次续传未写入任何数据：{exc}", "danger")
             return render_template("upload_reports.html", result=None)
 
         flash(
@@ -105,8 +106,13 @@ def batches():
         try:
             outcome = services.invalidate_batch(conn, batch_id, note)
         except ValueError as exc:
-            conn.rollback()
             flash(f"作废失败，未改动任何数据：{exc}", "danger")
+            return redirect(url_for("main.batches"))
+        except sqlite3.OperationalError as exc:
+            # 与并发续传/作废抢锁超时：事务已整体回滚，不留本次改动
+            current_app.logger.warning("作废等待写锁超时：%s", exc)
+            flash("作废未执行：系统正忙（并发写入冲突），未改动任何数据，请重试。",
+                  "warning")
             return redirect(url_for("main.batches"))
         inv = outcome["invalidation"]
         flash(

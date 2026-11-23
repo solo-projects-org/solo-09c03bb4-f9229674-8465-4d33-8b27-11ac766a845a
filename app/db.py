@@ -8,11 +8,17 @@ SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
 
 
 def get_db() -> sqlite3.Connection:
-    """请求级连接；row_factory 让结果可以按列名访问。"""
+    """请求级连接；row_factory 让结果可以按列名访问。
+
+    isolation_level=None 表示自动提交模式：事务不由 sqlite3 模块隐式管理，
+    而由 services 层的 write_transaction（BEGIN IMMEDIATE）显式开启，
+    保证“检查-写入”在同一事务内原子生效（修复作废/续传并发竞态）。
+    """
     if "db" not in g:
         conn = sqlite3.connect(
             current_app.config["DB_PATH"],
             detect_types=sqlite3.PARSE_DECLTYPES,
+            isolation_level=None,
         )
         conn.row_factory = sqlite3.Row
         # 外键约束 + 串行写入，保证作废/入档事务的完整性

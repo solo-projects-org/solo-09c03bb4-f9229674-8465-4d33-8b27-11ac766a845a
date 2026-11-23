@@ -5,16 +5,42 @@
 - 已生效配对不轻易改动，失效（其中报告被作废）才找替代；
 - 作废整批：同事务内失效报告、重核只涉及该批采样单、与名单一同生效；
 - 作废失败则全部回滚（不作废）；成功后该批新报告一律拒收。
+
+并发约定（修复作废/续传竞态）：
+- 连接使用自动提交模式（见 db.get_db），所有写操作包在 write_transaction
+  （BEGIN IMMEDIATE）里：进入事务即取得写锁，事务内的“检查-写入”
+  与其他写事务严格串行。因此：
+  * 同批报告先入档的，作废时一定看得到 -> 随批失效、所属单进重核；
+  * 作废先提交的，续传逐行校验时一定看得到 -> 该批行拒收、其余行照收；
+  * 两个写事务不会互相嵌套出“读旧写新”的中间态。
 """
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterable, Optional
 
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+@contextmanager
+def write_transaction(conn: sqlite3.Connection):
+    """串行化写事务：BEGIN IMMEDIATE 进入即取写锁，提交/回滚成对出现。
+
+    成功则提交；任何异常都回滚，不留下本次改动（作废失败亦不作废）。
+    锁被其他写事务占用时按 busy_timeout 等待，超时抛 OperationalError。
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
 
 
 # ---------------------------------------------------------------- 基础查询
@@ -114,14 +140,15 @@ def import_forms(conn: sqlite3.Connection, raw: str) -> dict:
         seen.add(token)
         cleaned.append(token)
 
-    existing = {
-        r["form_id"]
-        for r in conn.execute("SELECT form_id FROM forms").fetchall()
-    }
-    added = [f for f in cleaned if f not in existing]
-    conn.executemany(
-        "INSERT INTO forms (form_id) VALUES (?)", [(f,) for f in added]
-    )
+    with write_transaction(conn):
+        existing = {
+            r["form_id"]
+            for r in conn.execute("SELECT form_id FROM forms").fetchall()
+        }
+        added = [f for f in cleaned if f not in existing]
+        conn.executemany(
+            "INSERT INTO forms (form_id) VALUES (?)", [(f,) for f in added]
+        )
     return {
         "added": added,
         "existing": [f for f in cleaned if f in existing],
@@ -136,73 +163,76 @@ REQUIRED_FIELDS = ("form_id", "report_id", "bottle_no", "lab", "batch_id")
 def import_reports(conn: sqlite3.Connection, rows: Iterable[dict]) -> dict:
     """逐行校验并续传报告，成功入档后为相关单尝试配对。
 
-    行级问题（缺字段、名单外单号、重复报告号、已作废批次）只拒收该行，
-    不影响其他行；意外异常则整体回滚。
+    整个续传是一个 BEGIN IMMEDIATE 写事务：逐行校验（含“批次是否已作废”）
+    与入档、配对在同一事务内生效。与并发作废串行后只会有两种结果：
+    作废先提交 -> 该批行逐行拒收、其余合规行照收；续传先提交 ->
+    作废时这些报告随批一起失效。行级问题（缺字段、名单外单号、重复报告号、
+    已作废批次）只拒收该行，不影响其他行；意外异常则整体回滚。
     """
     inserted: list[dict] = []
     rejected: list[dict] = []
     touched_forms: list[str] = []
     seen_report_ids: set[str] = set()
 
-    for index, row in enumerate(rows, start=1):
-        record = {k: (row.get(k) or "").strip() for k in REQUIRED_FIELDS}
-        label = record.get("report_id") or f"第 {index} 行"
+    with write_transaction(conn):
+        for index, row in enumerate(rows, start=1):
+            record = {k: (row.get(k) or "").strip() for k in REQUIRED_FIELDS}
+            label = record.get("report_id") or f"第 {index} 行"
 
-        missing = [k for k in REQUIRED_FIELDS if not record[k]]
-        if missing:
-            rejected.append({"row": index, "report_id": label,
-                             "reason": f"缺少字段：{'、'.join(missing)}"})
-            continue
+            missing = [k for k in REQUIRED_FIELDS if not record[k]]
+            if missing:
+                rejected.append({"row": index, "report_id": label,
+                                 "reason": f"缺少字段：{'、'.join(missing)}"})
+                continue
 
-        form = conn.execute(
-            "SELECT 1 FROM forms WHERE form_id = ?", (record["form_id"],)
-        ).fetchone()
-        if form is None:
-            rejected.append({"row": index, "report_id": label,
-                             "reason": f"单号 {record['form_id']} 不在应复核名单中"})
-            continue
+            form = conn.execute(
+                "SELECT 1 FROM forms WHERE form_id = ?", (record["form_id"],)
+            ).fetchone()
+            if form is None:
+                rejected.append({"row": index, "report_id": label,
+                                 "reason": f"单号 {record['form_id']} 不在应复核名单中"})
+                continue
 
-        if record["report_id"] in seen_report_ids:
-            rejected.append({"row": index, "report_id": label,
-                             "reason": "报告号在本次文件内重复"})
-            continue
-        dup = conn.execute(
-            "SELECT 1 FROM reports WHERE report_id = ?", (record["report_id"],)
-        ).fetchone()
-        if dup is not None:
-            rejected.append({"row": index, "report_id": label,
-                             "reason": "报告号已入档，重复续传被拒收"})
-            continue
+            if record["report_id"] in seen_report_ids:
+                rejected.append({"row": index, "report_id": label,
+                                 "reason": "报告号在本次文件内重复"})
+                continue
+            dup = conn.execute(
+                "SELECT 1 FROM reports WHERE report_id = ?", (record["report_id"],)
+            ).fetchone()
+            if dup is not None:
+                rejected.append({"row": index, "report_id": label,
+                                 "reason": "报告号已入档，重复续传被拒收"})
+                continue
 
-        batch = conn.execute(
-            "SELECT * FROM batches WHERE batch_id = ?", (record["batch_id"],)
-        ).fetchone()
-        if batch is not None and batch["invalidated_at"] is not None:
-            rejected.append({"row": index, "report_id": label,
-                             "reason": f"质控批 {record['batch_id']} 已作废，该批新报告拒收"})
-            continue
+            batch = conn.execute(
+                "SELECT * FROM batches WHERE batch_id = ?", (record["batch_id"],)
+            ).fetchone()
+            if batch is not None and batch["invalidated_at"] is not None:
+                rejected.append({"row": index, "report_id": label,
+                                 "reason": f"质控批 {record['batch_id']} 已作废，该批新报告拒收"})
+                continue
 
-        if batch is None:
+            if batch is None:
+                conn.execute(
+                    "INSERT INTO batches (batch_id) VALUES (?)", (record["batch_id"],)
+                )
             conn.execute(
-                "INSERT INTO batches (batch_id) VALUES (?)", (record["batch_id"],)
+                "INSERT INTO reports (report_id, form_id, bottle_no, lab, batch_id) "
+                "VALUES (:report_id, :form_id, :bottle_no, :lab, :batch_id)",
+                record,
             )
-        conn.execute(
-            "INSERT INTO reports (report_id, form_id, bottle_no, lab, batch_id) "
-            "VALUES (:report_id, :form_id, :bottle_no, :lab, :batch_id)",
-            record,
-        )
-        seen_report_ids.add(record["report_id"])
-        inserted.append(record)
-        if record["form_id"] not in touched_forms:
-            touched_forms.append(record["form_id"])
+            seen_report_ids.add(record["report_id"])
+            inserted.append(record)
+            if record["form_id"] not in touched_forms:
+                touched_forms.append(record["form_id"])
 
-    paired: list[str] = []
-    pending: list[str] = []
-    for form_id in touched_forms:
-        pairing = attempt_pair(conn, form_id)
-        (paired if pairing is not None else pending).append(form_id)
+        paired: list[str] = []
+        pending: list[str] = []
+        for form_id in touched_forms:
+            pairing = attempt_pair(conn, form_id)
+            (paired if pairing is not None else pending).append(form_id)
 
-    conn.commit()
     return {
         "inserted": inserted,
         "rejected": rejected,
@@ -215,9 +245,12 @@ def import_reports(conn: sqlite3.Connection, rows: Iterable[dict]) -> dict:
 def invalidate_batch(conn: sqlite3.Connection, batch_id: str, note: str = "") -> dict:
     """作废整批报告并重核该批涉及的采样单（单事务）。
 
-    失败（批次不存在/已作废/无报告）抛 ValueError 并回滚，不产生任何作废。
+    BEGIN IMMEDIATE 进入即取写锁：批次、报告、采信配对、重核名单在同一
+    事务内更新；事务开始时点之前已入档的同批报告全部随批失效，其所属
+    采样单全部进重核。失败（批次不存在/已作废/无有效报告）抛 ValueError
+    并回滚，不产生任何作废。
     """
-    try:
+    with write_transaction(conn):
         batch = conn.execute(
             "SELECT * FROM batches WHERE batch_id = ?", (batch_id,)
         ).fetchone()
@@ -264,7 +297,8 @@ def invalidate_batch(conn: sqlite3.Connection, batch_id: str, note: str = "") ->
                         (now, f"质控批 {batch_id} 作废，报告 {'、'.join(sorted(hit))} 失效",
                          before["id"]),
                     )
-                    # 仅当配对确实失效（有幸存者或整体失效）才找替代
+                    # 仅当配对确实失效（有幸存者或整体失效）才找替代；
+                    # 替代从“作废生效前已入档且仍有效”的报告中挑，幸存者优先
                     new_pairing = attempt_pair(conn, form_id, prefer=survivors or None)
                     if new_pairing is not None:
                         rebuilt += 1
@@ -292,19 +326,15 @@ def invalidate_batch(conn: sqlite3.Connection, batch_id: str, note: str = "") ->
             "rebuilt_pairings, note) VALUES (?, ?, ?, ?, ?, ?)",
             (batch_id, now, len(affected_forms), retained, rebuilt, note or None),
         )
-        conn.commit()
         invalidation = conn.execute(
             "SELECT * FROM batch_invalidations WHERE id = ?", (cur.lastrowid,)
         ).fetchone()
-        return {
-            "invalidation": invalidation,
-            "affected_forms": affected_forms,
-            "retained": retained,
-            "rebuilt": rebuilt,
-        }
-    except Exception:
-        conn.rollback()
-        raise
+    return {
+        "invalidation": invalidation,
+        "affected_forms": affected_forms,
+        "retained": retained,
+        "rebuilt": rebuilt,
+    }
 
 
 # ---------------------------------------------------------------- 页面查询

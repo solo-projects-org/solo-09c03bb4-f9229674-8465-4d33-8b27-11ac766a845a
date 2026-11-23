@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""两个需求场景的端到端试跑：
+"""需求场景端到端试跑：
   A. 作废换证：整批作废 -> 原配对解体/保留 -> 幸存者优先重建 -> 该批新报告拒收
   B. 交错入档：重核期间名单照常查询，其他批报告交错续传、自动核销
+  C. 并发链路：作废与续传并发（两种提交顺序 + 不指定顺序），验证串行化修复
 用法：python3 scripts/demo_scenarios.py [数据库路径]（默认 data/demo.db，自动重建）
 """
 import os
+import sqlite3
 import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -143,6 +146,169 @@ def scenario_b_interleaved_archiving(conn):
     assert not services.open_rechecks(conn)
 
 
+def scenario_c_concurrent_upload_and_invalidate(db_path):
+    """作废与续传并发：两个线程各用独立连接同时操作同一数据库文件。"""
+    print("\n" + "=" * 70)
+    print("场景 C：作废与续传并发（BEGIN IMMEDIATE 串行化）")
+    print("=" * 70)
+
+    def connect():
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+
+    def check_invariants(tag):
+        conn = connect()
+        slipped = conn.execute(
+            "SELECT r.report_id FROM reports r JOIN batches b ON b.batch_id = r.batch_id "
+            "WHERE b.invalidated_at IS NOT NULL AND r.valid = 1").fetchall()
+        stale = conn.execute(
+            "SELECT p.id FROM pairings p JOIN reports r "
+            "ON r.report_id IN (p.report_a_id, p.report_b_id) "
+            "WHERE p.dissolved_at IS NULL AND r.valid = 0").fetchall()
+        assert not slipped, f"{tag}: 作废批中仍有有效报告 {[r['report_id'] for r in slipped]}"
+        assert not stale, f"{tag}: 生效配对引用了失效报告 {[r['id'] for r in stale]}"
+        print(f"  不变量[{tag}]：作废批无有效报告、生效配对无失效成员 ✔")
+        conn.close()
+
+    # ---- 顺序一：续传先提交，作废把“刚入档的同批报告”一起失效并重核 ----
+    conn = connect()
+    services.import_forms(conn, "F-301\nF-302\nF-303")
+    upload(conn, "\n".join([
+        HEADER,
+        "F-301,R301-1,B1,LAB-A,BAT-C1",
+        "F-301,R301-2,B2,LAB-B,BAT-C1",
+    ]))
+    conn.close()
+
+    upload_inside = threading.Event()
+    invalidate_started = threading.Event()
+    errors = {}
+
+    def rows_order1():
+        yield rep("F-302", "R302-1", "B3", "LAB-A", "BAT-C1")   # 与作废批同批
+        upload_inside.set()
+        invalidate_started.wait(5)
+        for i in range(10):                                      # 其他批合规行
+            yield rep("F-303", f"R303-{i}", f"BB{i}",
+                      "LAB-B" if i % 2 else "LAB-C", "BAT-C2")
+
+    def upload_worker():
+        c = connect()
+        try:
+            services.import_reports(c, rows_order1())
+        except Exception as exc:  # noqa: BLE001
+            errors["upload"] = exc
+        finally:
+            c.close()
+
+    def invalidate_worker():
+        c = connect()
+        try:
+            invalidate_started.set()
+            services.invalidate_batch(c, "BAT-C1")
+        except Exception as exc:  # noqa: BLE001
+            errors["invalidate"] = exc
+        finally:
+            c.close()
+
+    t1 = threading.Thread(target=upload_worker)
+    t1.start()
+    assert upload_inside.wait(5)
+    t2 = threading.Thread(target=invalidate_worker)
+    t2.start()
+    t1.join(20)
+    t2.join(20)
+    assert not errors, f"顺序一并发出现异常：{errors}"
+    conn = connect()
+    r = conn.execute("SELECT valid FROM reports WHERE report_id='R302-1'").fetchone()
+    assert r["valid"] == 0, "先入档的同批报告应随批作废"
+    opens = {e["form_id"] for e in services.open_rechecks(conn)}
+    assert {"F-301", "F-302"} <= opens, f"F-301/F-302 应进重核，实际 {opens}"
+    n = conn.execute("SELECT COUNT(*) c FROM reports WHERE batch_id='BAT-C2'").fetchone()["c"]
+    assert n == 10, "其他批次 10 行应全部入档"
+    print("  顺序一（入档先->作废后）：R302-1 随批失效，F-301/F-302 进重核，"
+          "BAT-C2 十行照收 ✔")
+    check_invariants("顺序一")
+    conn.close()
+
+    # ---- 顺序二：作废先提交，续传的同批行逐行拒收、其余行照收 ----
+    conn = connect()
+    services.import_forms(conn, "F-401\nF-402")
+    upload(conn, "\n".join([
+        HEADER,
+        "F-401,R401-1,B1,LAB-A,BAT-D1",
+        "F-401,R401-2,B2,LAB-B,BAT-D1",
+    ]))
+    services.invalidate_batch(conn, "BAT-D1")
+    result = upload(conn, "\n".join([
+        HEADER,
+        "F-402,R402-1,B3,LAB-A,BAT-D1",   # 已作废批 -> 拒收
+        "F-402,R402-2,B4,LAB-A,BAT-D2",   # 合规 -> 照收
+        "F-402,R402-3,B5,LAB-B,BAT-D2",   # 合规 -> 照收并配成
+    ]))
+    assert len(result["rejected"]) == 1 and "已作废" in result["rejected"][0]["reason"]
+    assert len(result["inserted"]) == 2
+    assert services.active_pairing(conn, "F-402") is not None
+    print("  顺序二（作废先->入档后）：BAT-D1 行拒收（"
+          f"{result['rejected'][0]['reason']}），BAT-D2 两行照收并配成 ✔")
+    check_invariants("顺序二")
+    conn.close()
+
+    # ---- 不指定顺序：多轮并发，任意交错都收敛到正确终态 ----
+    for round_no in range(3):
+        conn = connect()
+        services.import_forms(conn, f"F-5{round_no}1\nF-5{round_no}2")
+        upload(conn, "\n".join([
+            HEADER,
+            f"F-5{round_no}1,R5{round_no}1-1,B1,LAB-A,BAT-E{round_no}",
+            f"F-5{round_no}1,R5{round_no}1-2,B2,LAB-B,BAT-E{round_no}",
+        ]))
+        conn.close()
+        errors = {}
+
+        def upload_worker2(rn=round_no):
+            c = connect()
+            try:
+                services.import_reports(c, [
+                    rep(f"F-5{rn}2", f"R5{rn}2-1", "B3", "LAB-A", f"BAT-E{rn}"),
+                    rep(f"F-5{rn}2", f"R5{rn}2-2", "B4", "LAB-B", f"BAT-F{rn}"),
+                    rep(f"F-5{rn}2", f"R5{rn}2-3", "B5", "LAB-C", f"BAT-F{rn}"),
+                ])
+            except Exception as exc:  # noqa: BLE001
+                errors["upload"] = exc
+            finally:
+                c.close()
+
+        def invalidate_worker2(rn=round_no):
+            c = connect()
+            try:
+                services.invalidate_batch(c, f"BAT-E{rn}")
+            except Exception as exc:  # noqa: BLE001
+                errors["invalidate"] = exc
+            finally:
+                c.close()
+
+        t1 = threading.Thread(target=upload_worker2)
+        t2 = threading.Thread(target=invalidate_worker2)
+        t1.start()
+        t2.start()
+        t1.join(20)
+        t2.join(20)
+        assert not errors, f"第 {round_no} 轮并发异常：{errors}"
+        conn = connect()
+        rid = f"R5{round_no}2-1"
+        row = conn.execute("SELECT valid FROM reports WHERE report_id=?", (rid,)).fetchone()
+        state = "未落库（作废先提交，被拒收）" if row is None else \
+            f"已落库 valid={row['valid']}（入档先提交，随批失效）"
+        assert row is None or row["valid"] == 0
+        print(f"  第 {round_no} 轮无序并发：{rid} {state} ✔")
+        check_invariants(f"第 {round_no} 轮")
+        conn.close()
+
+
 def main():
     db_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "demo.db")
@@ -159,7 +325,8 @@ def main():
         conn = get_db()
         scenario_a_invalidate_and_replace(conn)
         scenario_b_interleaved_archiving(conn)
-    print("\n两个场景试跑全部通过 ✔")
+    scenario_c_concurrent_upload_and_invalidate(db_path)
+    print("\n三个场景试跑全部通过 ✔")
 
 
 if __name__ == "__main__":
