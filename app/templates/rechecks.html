@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}重核待补名单{% endblock %}
+{% block content %}
+<h2>重核待补名单（作废后仍缺采信报告的采样单）</h2>
+<p class="muted">重核期间名单照常查询，其他质控批的报告可继续续传；补齐两份不同原瓶、不同实验室的有效报告后自动核销。</p>
+<table>
+  <thead><tr><th>采样单号</th><th>触发批次</th><th>进入重核时间</th><th>当前有效报告数</th><th>操作</th></tr></thead>
+  <tbody>
+  {% for e in rechecks %}
+  <tr>
+    <td>{{ e.form_id }}</td><td>{{ e.batch_id }}</td><td>{{ e.created_at }}</td>
+    <td>{{ e.valid_reports }}</td>
+    <td><a href="{{ url_for('main.form_detail', form_id=e.form_id) }}">查看明细</a></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">当前没有重核待补单。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

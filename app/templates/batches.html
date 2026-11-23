@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}质控批与作废{% endblock %}
+{% block content %}
+<h2>质控批号管理与整批作废</h2>
+<div class="panel">
+  <h3>作废整批报告</h3>
+  <p class="muted">
+    作废与重核名单在同一事务生效：仅该批涉及的采样单进入重核；原配对仍有效则保留，
+    失效才以其他批有效报告找替代；失败则全部回滚、不作废；成功后该批新报告一律拒收。
+  </p>
+  <form method="post">
+    <input type="text" name="batch_id" placeholder="质控批号，如 BAT-1" required>
+    <input type="text" name="note" placeholder="作废说明（可选）">
+    <button type="submit" class="danger-btn">确认作废该批</button>
+  </form>
+</div>
+
+<h3>质控批一览</h3>
+<table>
+  <thead><tr><th>质控批号</th><th>首次入档</th><th>报告（有效/总数）</th><th>状态</th><th>待重核单</th></tr></thead>
+  <tbody>
+  {% for b in batches %}
+  <tr class="{{ '' if not b.invalidated_at else 'invalid-row' }}">
+    <td>{{ b.batch_id }}</td><td>{{ b.created_at }}</td>
+    <td>{{ b.valid_reports }} / {{ b.total_reports }}</td>
+    <td>{% if b.invalidated_at %}<span class="badge danger">已作废（{{ b.invalidated_at }}）</span>
+        {% else %}<span class="badge ok">有效</span>{% endif %}</td>
+    <td>{% if b.open_rechecks %}{{ b.open_rechecks }} 单待补{% else %}—{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">尚无报告入档，质控批将在首次续传时自动建立。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3>当前重核待补名单</h3>
+<table>
+  <thead><tr><th>采样单号</th><th>触发批次</th><th>建立时间</th><th>当前有效报告数</th></tr></thead>
+  <tbody>
+  {% for e in rechecks %}
+  <tr><td><a href="{{ url_for('main.form_detail', form_id=e.form_id) }}">{{ e.form_id }}</a></td>
+      <td>{{ e.batch_id }}</td><td>{{ e.created_at }}</td><td>{{ e.valid_reports }}</td></tr>
+  {% else %}
+  <tr><td colspan="4" class="muted">没有待补的重核单。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

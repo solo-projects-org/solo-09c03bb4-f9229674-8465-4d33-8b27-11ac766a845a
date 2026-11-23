@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}水质独立复核管理{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+  <h1>水质采样独立复核管理系统</h1>
+  <nav>
+    <a href="{{ url_for('main.index') }}">采样单与采信报告</a>
+    <a href="{{ url_for('main.import_forms') }}">导入应复核名单</a>
+    <a href="{{ url_for('main.upload_reports') }}">续传报告 CSV</a>
+    <a href="{{ url_for('main.batches') }}">质控批与作废</a>
+    <a href="{{ url_for('main.rechecks') }}">重核待补名单</a>
+  </nav>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flashes">
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+<footer>原水质控 · 独立复核（每份采样单须两份不同原瓶、不同实验室的有效报告）</footer>
+</body>
+</html>

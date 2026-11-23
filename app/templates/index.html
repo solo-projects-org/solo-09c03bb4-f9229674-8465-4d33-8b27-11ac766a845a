@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}采样单与采信报告{% endblock %}
+{% block content %}
+<h2>采样单配对总览</h2>
+<section class="stats">
+  <div class="card"><b>{{ stats.total_forms }}</b><span>应复核单</span></div>
+  <div class="card ok"><b>{{ stats.paired }}</b><span>已采信（两份报告）</span></div>
+  <div class="card warn"><b>{{ stats.pending }}</b><span>待补/无法配对</span></div>
+  <div class="card danger"><b>{{ stats.open_rechecks }}</b><span>重核中</span></div>
+</section>
+
+<table>
+  <thead>
+  <tr>
+    <th>采样单号</th>
+    <th>报告入档（有效/总数）</th>
+    <th>采信的报告号</th>
+    <th>状态</th>
+    <th>重核</th>
+    <th>操作</th>
+  </tr>
+  </thead>
+  <tbody>
+  {% for f in forms %}
+  <tr>
+    <td>{{ f.form_id }}</td>
+    <td>{{ f.valid_reports }} / {{ f.total_reports }}</td>
+    <td>
+      {% if f.pairing_id %}
+        <span class="report-id">{{ f.report_a_id }}</span>
+        <span class="report-id">{{ f.report_b_id }}</span>
+        <div class="muted">配对于 {{ f.paired_at }}</div>
+      {% else %}
+        <span class="badge warn">待补</span>
+      {% endif %}
+    </td>
+    <td>
+      {% if f.pairing_id %}<span class="badge ok">已采信</span>
+      {% else %}<span class="badge warn">待补：缺两份不同原瓶、不同实验室的有效报告</span>{% endif %}
+    </td>
+    <td>{% if f.open_rechecks %}<span class="badge danger">重核中 ×{{ f.open_rechecks }}</span>
+        {% else %}—{% endif %}</td>
+    <td><a href="{{ url_for('main.form_detail', form_id=f.form_id) }}">详情/报告明细</a></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">还没有导入应复核单号，<a href="{{ url_for('main.import_forms') }}">先导入名单</a>。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

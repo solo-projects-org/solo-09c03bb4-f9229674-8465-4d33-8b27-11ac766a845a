@@ -1,0 +1,21 @@
+services:
+  qc-review:
+    build: .
+    image: water-qc-review:latest
+    container_name: water-qc-review
+    ports:
+      - "5000:5000"
+    volumes:
+      - qc-data:/data
+    environment:
+      DB_PATH: /data/qc.db
+      SECRET_KEY: change-me-in-production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  qc-data:

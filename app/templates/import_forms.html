@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}导入应复核名单{% endblock %}
+{% block content %}
+<h2>导入应复核采样单名单</h2>
+<p class="muted">每行一个单号；空格分隔的条目视为非法并提示，不影响其他单号。名单可多次追加导入。</p>
+<form method="post">
+  <textarea name="form_ids" rows="12" placeholder="CY-001&#10;CY-002&#10;CY-003"></textarea>
+  <p><button type="submit">导入名单</button></p>
+</form>
+{% endblock %}

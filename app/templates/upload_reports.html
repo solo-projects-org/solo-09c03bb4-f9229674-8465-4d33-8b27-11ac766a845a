@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}续传报告 CSV{% endblock %}
+{% block content %}
+<h2>续传报告 CSV</h2>
+<p class="muted">
+  表头需包含：<code>单号, 报告号, 原瓶号, 实验室, 质控批号</code>（支持英文表头 form_id/report_id/bottle_no/lab/batch_id，
+  编码支持 UTF-8、UTF-8-BOM、GBK）。名单外单号、重复报告号、已作废质控批的报告将被逐行拒收。
+</p>
+<form method="post" enctype="multipart/form-data">
+  <label class="file-label">选择 CSV 文件：
+    <input type="file" name="csv_file" accept=".csv,text/csv">
+  </label>
+  <p>或者直接粘贴 CSV 文本：</p>
+  <textarea name="csv_text" rows="10" placeholder="单号,报告号,原瓶号,实验室,质控批号&#10;CY-001,R-1,B-1,实验室甲,BAT-1"></textarea>
+  <p><button type="submit">续传入档</button></p>
+</form>
+
+{% if result %}
+<h3>本次入档结果</h3>
+<p>入档 {{ result.inserted|length }} 份；拒收 {{ result.rejected|length }} 份；
+   新配成 {{ result.paired|length }} 单，待补 {{ result.pending|length }} 单。</p>
+{% if result.inserted %}
+<details open>
+<summary>已入档报告（{{ result.inserted|length }}）</summary>
+<table>
+  <thead><tr><th>单号</th><th>报告号</th><th>原瓶号</th><th>实验室</th><th>质控批号</th></tr></thead>
+  <tbody>
+  {% for r in result.inserted %}
+  <tr><td>{{ r.form_id }}</td><td>{{ r.report_id }}</td><td>{{ r.bottle_no }}</td><td>{{ r.lab }}</td><td>{{ r.batch_id }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</details>
+{% endif %}
+{% if result.rejected %}
+<details open>
+<summary class="danger">拒收明细（{{ result.rejected|length }}）</summary>
+<table>
+  <thead><tr><th>行号</th><th>报告号/条目</th><th>拒收原因</th></tr></thead>
+  <tbody>
+  {% for r in result.rejected %}
+  <tr><td>{{ r.row }}</td><td>{{ r.report_id }}</td><td>{{ r.reason }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</details>
+{% endif %}
+{% endif %}
+{% endblock %}

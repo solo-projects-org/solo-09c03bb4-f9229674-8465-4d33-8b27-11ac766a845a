@@ -1,0 +1,47 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0; font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  background: #f4f6f9; color: #1f2d3d;
+}
+header { background: #1f4e79; color: #fff; padding: 16px 24px; }
+header h1 { margin: 0 0 8px; font-size: 20px; }
+nav a { color: #cfe1f5; margin-right: 18px; text-decoration: none; font-size: 14px; }
+nav a:hover { color: #fff; text-decoration: underline; }
+main { max-width: 1180px; margin: 24px auto; padding: 0 20px; }
+footer { text-align: center; color: #8492a6; font-size: 12px; padding: 24px; }
+h2 { border-left: 4px solid #1f4e79; padding-left: 10px; }
+h3 { margin-top: 28px; }
+table { width: 100%; border-collapse: collapse; background: #fff; margin: 12px 0; font-size: 13px; }
+th, td { border: 1px solid #dcdfe6; padding: 8px 10px; text-align: left; vertical-align: top; }
+th { background: #eef3fa; }
+.invalid-row { background: #fdf2f0; color: #a1514a; }
+.muted { color: #8492a6; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+.badge.ok { background: #e1f3d8; color: #2f7d32; }
+.badge.warn { background: #faecd8; color: #b26a00; }
+.badge.danger { background: #fde2e2; color: #c45656; }
+.report-id { display: inline-block; background: #ecf5ff; border: 1px solid #b3d8ff;
+  color: #1f4e79; border-radius: 4px; padding: 1px 6px; margin: 1px 4px 1px 0; font-family: monospace; }
+.stats { display: flex; gap: 16px; margin: 16px 0; }
+.card { flex: 1; background: #fff; border-radius: 8px; padding: 16px; text-align: center;
+  border: 1px solid #dcdfe6; }
+.card b { display: block; font-size: 28px; color: #1f4e79; }
+.card span { font-size: 13px; color: #8492a6; }
+.card.ok b { color: #2f7d32; } .card.warn b { color: #b26a00; } .card.danger b { color: #c45656; }
+.flash { padding: 10px 14px; border-radius: 6px; margin: 8px 0; font-size: 14px; }
+.flash.info { background: #ecf5ff; border: 1px solid #b3d8ff; }
+.flash.warning { background: #faecd8; border: 1px solid #f5dab1; }
+.flash.danger { background: #fde2e2; border: 1px solid #fbc4c4; }
+textarea, input[type=text] { width: 100%; padding: 10px; border: 1px solid #c0ccda;
+  border-radius: 6px; font-size: 14px; font-family: monospace; }
+textarea { resize: vertical; }
+button { background: #1f4e79; color: #fff; border: 0; border-radius: 6px;
+  padding: 10px 22px; font-size: 14px; cursor: pointer; margin-top: 10px; }
+button:hover { background: #2a6496; }
+.danger-btn { background: #c45656; } .danger-btn:hover { background: #a63b3b; }
+.panel { background: #fff; border: 1px solid #dcdfe6; border-radius: 8px; padding: 16px 20px; }
+.panel form { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.panel form input[type=text] { flex: 1; min-width: 200px; }
+.file-label { font-weight: bold; display: block; margin-bottom: 8px; }
+code { background: #eef1f5; padding: 1px 6px; border-radius: 4px; }
+a { color: #1f4e79; }

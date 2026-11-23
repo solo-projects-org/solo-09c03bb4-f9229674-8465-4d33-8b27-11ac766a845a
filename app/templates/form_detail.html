@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}单号 {{ d.form.form_id }} 详情{% endblock %}
+{% block content %}
+<h2>采样单 {{ d.form.form_id }} 的报告与配对明细</h2>
+
+<h3>报告清单</h3>
+<table>
+  <thead><tr><th>报告号</th><th>原瓶号</th><th>实验室</th><th>质控批号</th><th>入档时间</th><th>状态</th></tr></thead>
+  <tbody>
+  {% for r in d.reports %}
+  <tr class="{{ '' if r.valid else 'invalid-row' }}">
+    <td>{{ r.report_id }}</td><td>{{ r.bottle_no }}</td><td>{{ r.lab }}</td>
+    <td>{{ r.batch_id }}</td><td>{{ r.archived_at }}</td>
+    <td>{% if r.valid %}<span class="badge ok">有效</span>
+        {% else %}<span class="badge danger">已作废（{{ r.invalidated_at }}）</span>{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">尚无报告入档。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3>配对记录</h3>
+<table>
+  <thead><tr><th>报告 A</th><th>报告 B</th><th>建立时间</th><th>状态</th><th>解体原因</th></tr></thead>
+  <tbody>
+  {% for p in d.pairings %}
+  <tr>
+    <td>{{ p.report_a_id }}</td><td>{{ p.report_b_id }}</td><td>{{ p.created_at }}</td>
+    <td>{% if p.dissolved_at %}<span class="badge warn">已解体（{{ p.dissolved_at }}）</span>
+        {% else %}<span class="badge ok">生效中（采信）</span>{% endif %}</td>
+    <td>{{ p.dissolve_reason or '—' }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">尚无配对。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3>重核记录</h3>
+<table>
+  <thead><tr><th>触发批次</th><th>建立时间</th><th>状态</th><th>核销时间</th></tr></thead>
+  <tbody>
+  {% for e in d.rechecks %}
+  <tr>
+    <td>{{ e.batch_id }}</td><td>{{ e.created_at }}</td>
+    <td>{% if e.status == 'open' %}<span class="badge danger">重核中（待补）</span>
+        {% else %}<span class="badge ok">已核销</span>{% endif %}</td>
+    <td>{{ e.resolved_at or '—' }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="muted">无重核记录。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p><a href="{{ url_for('main.index') }}">← 返回总览</a></p>
+{% endblock %}
